@@ -1,6 +1,6 @@
 # Dust & Dynamite: Last Rodeo of Redwater Gulch
 
-A complete desktop browser arena game for 1–8 human players, with AI filling every empty saddle. HTML5 Canvas client, Node.js + Express + Socket.IO authoritative server. All artwork and audio are procedural; no asset pack or API key is required.
+A desktop browser arena game with a third-person 3D camera behind your rider, 2–8 room slots, and optional AI opponents. Three.js/WebGL2 renders the scene; Node.js + Express + Socket.IO runs the authoritative server. All artwork and audio are procedural; no asset pack or API key is required. Play the hosted game at https://dust-and-dynamite.onrender.com.
 
 ## Install and run
 
@@ -24,20 +24,27 @@ npm start
 
 For a public link that works over the Internet, see **[DEPLOY.md](DEPLOY.md)**. This project includes a `render.yaml` configuration for Render's free Node web service plan.
 
-1. Choose your name, horse breed/color, threads and hat. Choose a mode.
-2. **Saddle Up** joins an open Quick Match lobby for that mode or creates one. **Create Private Room** creates a code-only lobby excluded from Quick Match.
+1. Choose your name, horse breed/color, threads and hat. Choose a mode, room size (2–8), and whether to fill empty slots with bots.
+2. **Saddle Up** joins an open Quick Match lobby with the same mode, size and bot setting or creates one. **Create Private Room** creates a code-only lobby excluded from Quick Match.
 3. Friends open the **same server**, enter the five-character code and choose **Join Room**. The room's mode overrides their local selection.
-4. Every human presses **Ready to Ride**. Seven AI opponents are added for a solo player; fewer for a group. A 3–2–1 countdown starts immediately when all humans are ready.
+4. Every human presses **Ready to Ride**. With bot fill enabled, AI joins up to the chosen room size. With **No bots**, only the friends in the room join: at least two people are required. Posse mode needs an even number for equal teams. A 3–2–1 countdown starts when everyone is ready and those conditions are met.
 5. Survive, watch the results, then choose **One More Rodeo**. This returns everyone to ready-up; each rider must ready up again.
 
-For two players on one machine, open two browser tabs before readying. On a trusted LAN, friends use `http://YOUR_SERVER_LAN_IP:3000` (localhost refers to their own machine). Your OS must permit the server's inbound port. For Internet multiplayer, run this Node process on a server with a reachable URL and WebSocket support; all players visit that URL. Static hosting alone cannot run the multiplayer server. This delivery does not provision Internet hosting.
+The creator is the room host. The host can change the room size and bot setting on the poster wall between rounds; doing so resets everyone's ready status. A room cannot shrink below the number of friends already present. If the host leaves, the next human becomes host. Settings persist on rematch. For a friends-only duel, select **2 riders** and **No bots** before creating a private room.
+
+For two players on one machine, open two browser tabs before readying. On a trusted LAN, friends use `http://YOUR_SERVER_LAN_IP:3000` (localhost refers to their own machine). Your OS must permit the server's inbound port. For Internet multiplayer, use the hosted address or run this Node process on a reachable host with WebSocket support. Static hosting alone cannot run the multiplayer server.
 
 ## Controls
 
 | Input | Action |
 | --- | --- |
-| WASD / arrow keys | Ride toward direction; momentum and turning arc apply |
-| Mouse | Aim independently of horse heading |
+| WASD / arrow keys | Ride relative to the camera; momentum and turning arc apply |
+| Click the arena | Capture the mouse for free look |
+| Mouse | Turn the third-person camera and center crosshair |
+| Right mouse button, hold | Zoom over the shoulder and aim; right-drag also rotates without mouse capture |
+| V | Toggle third-person / higher chase camera |
+| C | Swap left/right shoulder |
+| Escape | Release mouse capture and controls |
 | Left mouse button, hold | Fire at weapon's allowed rate |
 | R | Reload from reserve ammunition |
 | Shift | Sprint while stamina lasts |
@@ -52,7 +59,7 @@ Sound begins only after interaction and is muted initially. The sound button is 
 ## Rules and equipment
 
 - **Free-for-All:** last living rider wins.
-- **Posse vs Posse:** alternating slots make two balanced teams of four (Copper and Sage). Teammates cannot shoot, lasso or explode each other. Last surviving posse wins. Team names appear in the ledger and allies have sage name labels.
+- **Posse vs Posse:** alternating slots make two balanced teams (Copper and Sage), up to four per team. Choose an even room size. Teammates cannot shoot, lasso or explode each other. Last surviving posse wins. Team names appear in the ledger and allies have sage name labels.
 - **Bounty Hunt:** last living rider wins; the living player with the most kills (at least one) carries a visible bounty. Bots favor the bounty. Defeating them grants $300 instead of the usual $100. A survivor earns $500. Ties for the lead retain the earlier slot.
 - Rounds last at most **180 seconds**. The storm shrinks during seconds 120–180 and damages riders beyond the ring. Multiple survivors at the time limit draw; no arbitrary winner is selected.
 - Rider health and horse health are separate. Bullets have a 55% chance to hit the horse while mounted. When the horse reaches zero, the rider switches to a revolver and has **10 seconds on foot**, even if they heal.
@@ -75,6 +82,7 @@ dust-and-dynamite/
 │   ├── index.html
 │   ├── style.css
 │   ├── game.js
+│   ├── view3d.js
 │   └── shared.js
 └── test/
     └── game.test.js
@@ -84,7 +92,9 @@ dust-and-dynamite/
 
 ## Networking and performance
 
-The server runs a fixed 30 Hz simulation and publishes 15 snapshots per second. Clients draw with `requestAnimationFrame` targeting the browser's refresh rate (60 FPS target; hardware dependent). Static ground details are cached on an offscreen canvas and device pixel ratio is capped at two.
+The server runs a fixed 30 Hz simulation and publishes 15 snapshots per second. Clients draw with `requestAnimationFrame` targeting 60 FPS (hardware dependent). The 3D view uses procedural low-poly meshes, instanced scenery, warm lighting, shadows, fog, soft dust particles, animated horses and a camera boom that shortens near walls. Its pixel ratio is capped at 1.5. Three.js is installed with npm and served locally under `/vendor/`; players do not download it from a third-party CDN. Browsers without WebGL2 retain the classic Canvas fallback.
+
+`view3d.js` maps server X/Y coordinates to 3D X/Z. The camera's center ray determines the horizontal firing direction, and camera-relative movement uses a sanitized `moveAngle` shared between client prediction and server simulation. Combat remains on the original flat arena plane: this update adds a third-person presentation, not vertical combat, building interiors, climbing or headshots. The Wild West style is procedural and stylized rather than using assets from other games.
 
 The local rider predicts movement using the shared fixed-step function. Each command has a sequence number; snapshots acknowledge the last consumed sequence. The client restores authoritative state and replays unacknowledged movement. Remote riders interpolate snapshots about 100 ms behind. This is a simple prediction/reconciliation implementation; correction snaps can be visible under heavy packet loss.
 
@@ -110,7 +120,7 @@ These are hitscan weapons. Projectile weapons need a server-owned entity update,
 
 ## Add or modify a map
 
-`MAP` in `client/shared.js` contains obstacle rectangles in world coordinates. `W` and `H` define arena dimensions. Each obstacle has `x`, `y`, `w`, `h`, `type`, and `low` (jumpable). `scenery()` in `client/game.js` draws each type. `ground()` draws the terrain once; cactus and shrubs are decorative, without collision.
+`MAP` in `client/shared.js` contains obstacle rectangles in world coordinates. `W` and `H` define arena dimensions. Each obstacle has `x`, `y`, `w`, `h`, `type`, and `low` (jumpable). `buildObstacle()` in `client/view3d.js` constructs its 3D mesh and camera-collision volume. Update `scenery()` in `client/game.js` too for the Canvas fallback. Cactus and shrubs are decorative, without server collision.
 
 To add another selectable map, introduce a map ID in the join form and room state; define a shared map table; use the selected map in movement collision, hitscan cover, crate spawning and rendering. Also update spawn positions, storm center/radius, stampede lanes, barrel paths and minimap scaling: these are intentionally authored for Redwater's 2200 × 1600 arena. Do not change only the background; server and client must agree on obstacles.
 
@@ -118,11 +128,11 @@ To add another selectable map, introduce a map ID in the join form and room stat
 
 1. Add a `HORSES` entry in `client/shared.js`, e.g. `Roan: { color: '#8e7963', speed: 232, turn: 3.9 }`.
 2. Add `<option>Roan</option>` to the horse select in `client/index.html`.
-3. `drawRider()` automatically uses the color. Add markings there for a distinct coat. Bot breed rotation currently uses the first four breeds; change the `% 4` expressions if you want bots to use more breeds.
+3. `makeHorse()` in `view3d.js` uses the coat color. Add geometry/markings there, and update `drawRider()` for portraits and the fallback view. Bot breed rotation currently uses the first four breeds; change the `% 4` expressions if you want bots to use more breeds.
 
 ## Art, sound and optional replacement assets
 
-Every horse, building, pickup, dust particle, muzzle flash and tumbleweed is drawn with Canvas. The UI grain is an embedded SVG filter. Google Fonts (`Rye` and `Special Elite`) improve the poster look when online; Georgia and Courier fallbacks keep it usable offline. To remove external font requests, delete the CSS `@import`.
+Every horse, building, pickup, dust particle, muzzle flash and tumbleweed is generated in code. The main view is 3D; Canvas generates textures, poster portraits and the fallback view. The UI grain is an embedded SVG filter. Google Fonts (`Rye` and `Special Elite`) improve the poster look when online; Georgia and Courier fallbacks keep it usable offline. To remove external font requests, delete the CSS `@import`.
 
 Web Audio supplies plucked-string and reed-like music, wind, hoof taps, gunshot/noise bursts, ricochet tones, a horse-like whinny and a victory bell. These are **synthesized placeholders**, not recorded acoustic instruments or realistic horse recordings.
 

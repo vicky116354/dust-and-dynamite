@@ -13,32 +13,41 @@ function createGameServer(options = {}) {
   const app = express(), server = http.createServer(app);
   const io = new Server(server, { maxHttpBufferSize: 8192 });
   const rooms = new Map();
+  // Serve the installed Three.js ES modules locally; no CDN is needed by players.
+  app.use('/vendor', express.static(path.join(__dirname, 'node_modules/three/build')));
   app.use(express.static(path.join(__dirname, 'client')));
   app.get('/health', (_, res) => res.json({ ok: true, rooms: rooms.size }));
   const emit = (r, type, data) => io.to(r.code).emit(type, data);
   function event(r, type, data = {}) { emit(r, 'effect', { type, ...data }); }
-  function newRoom(mode) {
+  function settings(data, mode) {
+    let maxPlayers = Number.isInteger(data.maxPlayers) ? S.clamp(data.maxPlayers, 2, 8) : 8;
+    if (mode === 'posse') maxPlayers -= maxPlayers % 2;
+    return { maxPlayers, fillBots: data.fillBots !== false };
+  }
+  function newRoom(mode, config, hostId) {
     let code;
     do { code = Array.from({ length: 5 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[randomInt(32)]).join(''); } while (rooms.has(code));
-    const r = { code, mode, phase: 'lobby', players: [], time: 0, countdown: 3, round: 0, pickups: [], dynamites: [], barrels: [], history: [], nextId: 0, storm: 1400, winner: '', feed: [], stampede: null };
+    const r = { code, mode, ...config, hostId, phase: 'lobby', players: [], time: 0, countdown: 3, round: 0, pickups: [], dynamites: [], barrels: [], history: [], nextId: 0, storm: 1400, winner: '', feed: [], stampede: null };
     rooms.set(code, r); return r;
   }
   function makePlayer(id, data, bot = false) {
     return { id, name: String(data.name || 'The Stranger').replace(/[<>\x00-\x1f]/g, '').slice(0, 18), horse: S.HORSES[data.horse] ? data.horse : 'Mustang', outfit: ['poncho', 'bandana', 'duster'].includes(data.outfit) ? data.outfit : 'poncho', hat: ['wide', 'flat', 'tall'].includes(data.hat) ? data.hat : 'wide', bot, ready: bot, input: {}, queue: [], seq: 0, kills: 0, score: 0, alive: true, x: 0, y: 0 };
   }
   function snapshot(r) {
-    return { code: r.code, mode: r.mode, phase: r.phase, round: r.round, countdown: r.countdown, time: r.time, storm: r.storm, winner: r.winner, bounty: r.bounty, pickups: r.pickups, dynamites: r.dynamites, barrels: r.barrels, stampede: r.stampede, feed: r.feed, players: r.players.map(({ input, queue, ...p }) => p) };
+    return { code: r.code, mode: r.mode, maxPlayers: r.maxPlayers, fillBots: r.fillBots, hostId: r.hostId, phase: r.phase, round: r.round, countdown: r.countdown, time: r.time, storm: r.storm, winner: r.winner, bounty: r.bounty, pickups: r.pickups, dynamites: r.dynamites, barrels: r.barrels, stampede: r.stampede, feed: r.feed, players: r.players.map(({ input, queue, ...p }) => p) };
   }
   function publish(r) { emit(r, 'state', { ...snapshot(r), serverTime: Date.now() }); }
   function headline(r, message) { r.feed.unshift(message); r.feed = r.feed.slice(0, 5); }
   function maybeStart(r) {
     const humans = r.players.filter(p => !p.bot);
     if (r.phase !== 'lobby' || !humans.length || !humans.every(p => p.ready)) return;
+    // Friends-only matches need two opponents; posses also need equal teams.
+    if (!r.fillBots && (humans.length < 2 || (r.mode === 'posse' && humans.length % 2))) return;
     const humanCount = humans.length;
     r.players = humans;
-    while (r.players.length < 8) r.players.push(makePlayer('bot-' + r.players.length, { name: BOT_NAMES[(r.players.length - humanCount) % 7], horse: Object.keys(S.HORSES)[r.players.length % 4], outfit: ['poncho', 'bandana', 'duster'][r.players.length % 3] }, true));
+    while (r.fillBots && r.players.length < r.maxPlayers) r.players.push(makePlayer('bot-' + r.players.length, { name: BOT_NAMES[(r.players.length - humanCount) % 7], horse: Object.keys(S.HORSES)[r.players.length % 4], outfit: ['poncho', 'bandana', 'duster'][r.players.length % 3] }, true));
     r.players.forEach((p, i) => {
-      const a = i * Math.PI / 4;
+      const a = i * Math.PI * 2 / r.players.length;
       Object.assign(p, { x: 1100 + Math.cos(a) * 760, y: 800 + Math.sin(a) * 540, vx: 0, vy: 0, angle: a + Math.PI, aim: a + Math.PI, hp: 100, horseHp: 100, stamina: 100, alive: true, weapon: 'revolver', ammo: 6, reserve: 48, dynamite: 2, lasso: 0, reload: 0, cooldown: 0, jump: 0, jumpCd: 0, boost: 0, stun: 0, foot: 0, kills: 0, team: i % 2, input: {}, queue: [], seq: 0 });
     });
     r.round++; r.time = 0; r.phase = 'countdown'; r.countdown = 3; r.storm = 1400; r.winner = ''; r.bounty = null; r.feed = []; r.history = []; r.dynamites = []; r.stampede = null;
@@ -194,7 +203,8 @@ function createGameServer(options = {}) {
     function leave() {
       if (!room) return;
       socket.leave(room.code); room.players = room.players.filter(p => p.id !== socket.id);
-      if (!room.players.some(p => !p.bot)) rooms.delete(room.code); else { maybeStart(room); publish(room); }
+      const humans = room.players.filter(p => !p.bot);
+      if (!humans.length) rooms.delete(room.code); else { if (room.hostId === socket.id) room.hostId = humans[0].id; maybeStart(room); publish(room); }
       room = null;
     }
     socket.on('join', (data, ack = () => {}) => {
@@ -202,17 +212,29 @@ function createGameServer(options = {}) {
       if (!data || typeof data !== 'object' || Date.now() - lastJoin < 500) return ack({ error: 'Please wait a moment.' });
       lastJoin = Date.now();
       const mode = ['ffa', 'posse', 'bounty'].includes(data.mode) ? data.mode : 'ffa';
+      const config = settings(data, mode);
       let r;
       if (data.code) r = rooms.get(String(data.code).trim().toUpperCase());
-      else if (data.quick) r = [...rooms.values()].find(r => r.quick && r.phase === 'lobby' && r.mode === mode && r.players.length < 8);
+      else if (data.quick) r = [...rooms.values()].find(r => r.quick && r.phase === 'lobby' && r.mode === mode && r.maxPlayers === config.maxPlayers && r.fillBots === config.fillBots && r.players.length < r.maxPlayers);
       if (data.code && !r) return ack({ error: 'That room code was not found.' });
-      if (r && (r.phase !== 'lobby' || r.players.length >= 8)) return ack({ error: 'That room is full or already riding.' });
+      if (r && (r.phase !== 'lobby' || r.players.length >= r.maxPlayers)) return ack({ error: 'That room is full or already riding.' });
       if (!r && rooms.size >= MAX_ROOMS) return ack({ error: 'The town is full. Try again later.' });
-      leave(); room = r || newRoom(mode); if (!r) room.quick = !!data.quick; lastSeq = 0;
+      leave(); room = r || newRoom(mode, config, socket.id); if (!r) room.quick = !!data.quick; lastSeq = 0;
       room.players.push(makePlayer(socket.id, data)); socket.join(room.code);
       ack({ code: room.code, id: socket.id }); publish(room);
     });
     socket.on('ready', () => { if (!room || room.phase !== 'lobby') return; const p = room.players.find(p => p.id === socket.id); p.ready = !p.ready; maybeStart(room); publish(room); });
+    socket.on('roomSettings', (data, ack = () => {}) => {
+      if (typeof ack !== 'function') return;
+      if (!room || room.phase !== 'lobby') return ack({ error: 'Room settings can be changed between rounds.' });
+      if (room.hostId !== socket.id) return ack({ error: 'Only the room host can change these settings.' });
+      if (!data || !Number.isInteger(data.maxPlayers) || data.maxPlayers < 2 || data.maxPlayers > 8 || typeof data.fillBots !== 'boolean') return ack({ error: 'Choose 2–8 slots and a bot setting.' });
+      if (room.mode === 'posse' && data.maxPlayers % 2) return ack({ error: 'Posse matches need an even room size.' });
+      if (room.players.length > data.maxPlayers) return ack({ error: 'That size is smaller than the number of riders already here.' });
+      Object.assign(room, settings(data, room.mode));
+      room.players.forEach(p => { p.ready = false; });
+      ack({ ok: true }); publish(room);
+    });
     socket.on('rematch', () => { if (!room || room.phase !== 'results') return; room.phase = 'lobby'; room.players = room.players.filter(p => !p.bot); room.players.forEach(p => { p.ready = false; }); publish(room); });
     socket.on('leave', leave);
     socket.on('input', data => {
@@ -222,6 +244,7 @@ function createGameServer(options = {}) {
       lastSeq = data.seq;
       if (p.queue.length >= 5) return;
       const i = { seq: data.seq, aim: S.angle(data.aim) };
+      if (Number.isFinite(data.moveAngle)) i.moveAngle = S.angle(data.moveAngle);
       for (const key of ['up', 'down', 'left', 'right', 'sprint', 'jump', 'reload', 'fire', 'dynamite', 'lasso']) i[key] = data[key] === true;
       p.queue.push(i); p.lastInput = Date.now();
     });
