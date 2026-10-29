@@ -3,6 +3,7 @@
 const S = GameShared, $ = id => document.getElementById(id);
 const canvas = $('arena'), ctx = canvas.getContext('2d'), mini = $('minimap').getContext('2d');
 const socket = io(), keys = new Set();
+let view3d = null;
 let state = null, myId = '', predicted = null, pending = [], seq = 0, previousPhase = '', muted = true;
 let width = innerWidth, height = innerHeight, mouse = { x: width / 2, y: height / 2, fire: false };
 let camera = { x: 1100, y: 800 }, scale = 1, lastFrame = performance.now(), worldTime = 0, latency = 0;
@@ -26,7 +27,7 @@ function join(quick, privateRoom = false) {
   if (!socket.connected) return text('error', 'The telegraph is disconnected. Is the server running?');
   const code = privateRoom ? '' : quick ? '' : $('code').value.trim();
   if (!quick && !privateRoom && !code) return text('error', 'Enter your five-character room code.');
-  socket.emit('join', { name: $('name').value, horse: $('horse').value, outfit: $('outfit').value, hat: $('hat').value, mode: $('mode').value, quick, code }, reply => {
+  socket.emit('join', { name: $('name').value, horse: $('horse').value, outfit: $('outfit').value, hat: $('hat').value, mode: $('mode').value, maxPlayers: Number($('maxPlayers').value), fillBots: $('fillBots').value === 'on', quick, code }, reply => {
     if (reply.error) return text('error', reply.error);
     myId = reply.id; pending = []; snapshots = []; predicted = null; seq = 0; previousPhase = '';
     localStorage.setItem('redwater-name', $('name').value);
@@ -38,6 +39,18 @@ $('quick').onclick = () => join(true);
 $('create').onclick = () => join(false, true);
 $('join').onclick = () => join(false);
 $('ready').onclick = () => socket.emit('ready');
+function sizeOptions(select, mode) {
+  for (const option of select.options) option.disabled = mode === 'posse' && Number(option.value) % 2 === 1;
+  if (mode === 'posse' && Number(select.value) % 2) select.value = String(Number(select.value) - 1);
+}
+$('mode').onchange = () => sizeOptions($('maxPlayers'), $('mode').value);
+function changeRoomSettings() {
+  text('lobbyError', '');
+  socket.emit('roomSettings', { maxPlayers: Number($('lobbySize').value), fillBots: $('lobbyBots').value === 'on' }, reply => {
+    if (reply.error) { text('lobbyError', reply.error); posterSignature = ''; renderPosters(); }
+  });
+}
+$('lobbySize').onchange = changeRoomSettings; $('lobbyBots').onchange = changeRoomSettings;
 $('rematch').onclick = () => socket.emit('rematch');
 document.querySelectorAll('.leave').forEach(b => b.onclick = () => { socket.emit('leave'); state = null; predicted = null; snapshots = []; previousPhase = ''; updateScreens(); });
 socket.on('connect', () => { text('connection', '● TELEGRAPH CONNECTED · READY TO RIDE'); text('error', ''); });
@@ -59,6 +72,7 @@ socket.on('state', next => {
   updateHUD();
 });
 socket.on('effect', e => {
+  view3d?.effect(e);
   effects.push({ ...e, life: e.type === 'explosion' ? .7 : e.type === 'lasso' ? .5 : .17, max: e.type === 'explosion' ? .7 : .17 });
   if (effects.length > 200) effects.shift();
   if (e.type === 'shot' && e.pellet === 0) audio.shot(e.weapon);
@@ -74,15 +88,22 @@ function updateScreens() {
   show('menu', !phase); show('lobby', phase === 'lobby'); show('hud', phase === 'round' || phase === 'countdown'); show('results', phase === 'results');
   document.body.classList.toggle('playing', phase === 'round' || phase === 'countdown');
   if (!phase || phase === 'lobby' || phase === 'results') { ledgerOpen = false; show('ledger', false); }
+  if (!['round', 'countdown'].includes(phase)) { show('crosshair', false); show('cameraReadout', false); show('lookHint', false); }
 }
 function renderPosters() {
-  const signature = JSON.stringify([state.code, state.players.map(p => [p.id, p.name, p.ready, p.horse, p.outfit, p.hat])]);
+  const signature = JSON.stringify([state.code, state.maxPlayers, state.fillBots, state.hostId, state.players.map(p => [p.id, p.name, p.ready, p.horse, p.outfit, p.hat])]);
   if (signature === posterSignature) return;
   posterSignature = signature;
   text('roomCode', state.code); text('lobbyMode', modes[state.mode]);
-  $('posters').innerHTML = Array.from({ length: 8 }, (_, i) => {
+  const host = state.hostId === myId, total = state.maxPlayers || 8, bots = state.fillBots !== false;
+  $('lobbySize').value = String(total); $('lobbyBots').value = bots ? 'on' : 'off';
+  $('lobbySize').disabled = $('lobbyBots').disabled = !host; sizeOptions($('lobbySize'), state.mode);
+  text('settingsNote', host ? 'You are the host · changes reset ready-up.' : 'The room host chooses the size and bot setting.');
+  const count = state.players.length;
+  text('readyHint', !bots && count < 2 ? 'No bots · invite at least one friend before the round can start.' : !bots && state.mode === 'posse' && count % 2 ? 'No bots · one more friend is needed for equal posses.' : `${count}/${total} friends here · ${bots ? `${total - count} bot${total - count === 1 ? '' : 's'} will fill empty slots` : 'no bots will join'} · everyone must ready up.`);
+  $('posters').innerHTML = Array.from({ length: total }, (_, i) => {
     const p = state.players[i];
-    return `<article class="paper poster ${p ? '' : 'waiting'}"><h3>WANTED</h3><canvas class="portrait" width="200" height="75" data-poster="${i}"></canvas><p>${p ? escapeHTML(p.name) : 'EMPTY SADDLE'}</p><small class="${p?.ready ? 'status-ready' : ''}">${p ? (p.ready ? '✦ READY TO RIDE' : 'WAITING ON THIS OUTLAW') : 'AI OUTLAW WILL JOIN'}</small></article>`;
+    return `<article class="paper poster ${p ? '' : 'waiting'}"><h3>WANTED</h3><canvas class="portrait" width="200" height="75" data-poster="${i}"></canvas><p>${p ? escapeHTML(p.name) + (p.id === state.hostId ? ' · HOST' : '') : 'EMPTY SADDLE'}</p><small class="${p?.ready ? 'status-ready' : ''}">${p ? (p.ready ? '✦ READY TO RIDE' : 'WAITING ON THIS OUTLAW') : bots ? 'AI OUTLAW WILL JOIN' : 'WAITING FOR A FRIEND'}</small></article>`;
   }).join('');
   document.querySelectorAll('[data-poster]').forEach(c => {
     const p = state.players[+c.dataset.poster] || { horse: horseKeys[+c.dataset.poster % 4], outfit: 'poncho', hat: 'wide' };
@@ -113,6 +134,8 @@ addEventListener('keydown', e => {
   if (['INPUT', 'SELECT'].includes(e.target.tagName)) return;
   if (['Space', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
   if (e.code === 'Tab' && !e.repeat) toggleLedger();
+  if (e.code === 'KeyV' && !e.repeat) view3d?.cycleCamera();
+  if (e.code === 'KeyC' && !e.repeat) view3d?.switchShoulder();
   keys.add(e.code); audio.start();
 });
 addEventListener('keyup', e => keys.delete(e.code));
@@ -121,10 +144,14 @@ canvas.addEventListener('pointermove', e => { mouse.x = e.clientX; mouse.y = e.c
 canvas.addEventListener('pointerdown', e => { if (e.button === 0) mouse.fire = true; audio.start(); });
 addEventListener('pointerup', () => { mouse.fire = false; });
 canvas.addEventListener('contextmenu', e => e.preventDefault());
+$('world3d').addEventListener('pointerdown', e => { if (e.button === 0 && state?.phase === 'round') mouse.fire = true; audio.start(); });
+$('lookHint').onclick = () => view3d?.lock();
 function inputCommand() {
   const p = predicted;
   const wx = (mouse.x - width / 2) / scale + camera.x, wy = (mouse.y - height / 2) / scale + camera.y;
-  return { seq: ++seq, up: keys.has('KeyW') || keys.has('ArrowUp'), down: keys.has('KeyS') || keys.has('ArrowDown'), left: keys.has('KeyA') || keys.has('ArrowLeft'), right: keys.has('KeyD') || keys.has('ArrowRight'), sprint: keys.has('ShiftLeft') || keys.has('ShiftRight'), jump: keys.has('Space'), reload: keys.has('KeyR'), dynamite: keys.has('KeyQ'), lasso: keys.has('KeyE'), fire: mouse.fire, aim: Math.atan2(wy - p.y, wx - p.x) };
+  const input = { seq: ++seq, up: keys.has('KeyW') || keys.has('ArrowUp'), down: keys.has('KeyS') || keys.has('ArrowDown'), left: keys.has('KeyA') || keys.has('ArrowLeft'), right: keys.has('KeyD') || keys.has('ArrowRight'), sprint: keys.has('ShiftLeft') || keys.has('ShiftRight'), jump: keys.has('Space'), reload: keys.has('KeyR'), dynamite: keys.has('KeyQ'), lasso: keys.has('KeyE'), fire: mouse.fire, aim: Math.atan2(wy - p.y, wx - p.x) };
+  if (view3d) { input.moveAngle = view3d.movementAngle(Number(input.up) - Number(input.down), Number(input.right) - Number(input.left)); input.aim = view3d.aimAngle(p); }
+  return input;
 }
 setInterval(() => {
   if (state?.phase !== 'round' || !predicted?.alive || !socket.connected) return;
@@ -232,6 +259,19 @@ function frame(now) {
   const dt = Math.min(.05, (now - lastFrame) / 1000); lastFrame = now; worldTime += dt;
   const playing = state && ['round', 'countdown'].includes(state.phase);
   const players = playing ? interpolatedPlayers(now) : [];
+  if (view3d) {
+    const view = view3d.render(players, state, predicted, myId, dt, worldTime);
+    const alive = playing && predicted?.alive;
+    show('crosshair', !!alive); show('cameraReadout', !!playing); show('lookHint', !!alive);
+    $('crosshair').classList.toggle('aiming', view.aiming);
+    const bearing = (Math.round(view.yaw * 180 / Math.PI) + 720) % 360;
+    text('cameraReadout', `${view.mode} · ${bearing}° · V CAMERA · C SHOULDER`);
+    text('lookHint', view.looking ? 'MOUSE LOOK · ESC TO PAUSE LOOK' : 'CLICK TO LOOK · HOLD RIGHT CLICK TO AIM');
+    $('lookHint').classList.toggle('locked', view.looking);
+    if (playing) drawMinimap(players);
+    audio.tick(dt, alive ? Math.hypot(predicted.vx, predicted.vy) : 0);
+    requestAnimationFrame(frame); return;
+  }
   const focus = predicted?.alive ? predicted : players.find(p => p.alive);
   const targetX = playing && focus ? focus.x : 1100 + Math.sin(worldTime * .04) * 250, targetY = playing && focus ? focus.y : 770;
   camera.x += (targetX - camera.x) * Math.min(1, dt * 7); camera.y += (targetY - camera.y) * Math.min(1, dt * 7);
@@ -311,4 +351,9 @@ const audio = {
   }
 };
 $('sound').onclick = () => { muted = !muted; audio.start(); text('sound', muted ? 'SOUND OFF ♫' : 'SOUND ON ♫'); };
+// Retain the original Canvas view as a fallback for browsers without WebGL2.
+import('./view3d.js').then(({ createView }) => {
+  view3d = createView($('world3d'), S, () => { keys.clear(); mouse.fire = false; });
+  $('world3d').hidden = false; canvas.style.visibility = 'hidden';
+}).catch(error => { console.warn('3D view unavailable; using Canvas fallback.', error); text('error', '3D is unavailable in this browser. The classic arena view is still playable.'); });
 requestAnimationFrame(frame);

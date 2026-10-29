@@ -41,7 +41,8 @@
     const moving = !!(dx || dy), mounted = p.horseHp > 0;
     const sprint = moving && i.sprint && p.stamina > 2 && mounted && !p.stun;
     p.stamina = clamp(p.stamina + (sprint ? -29 : 17) * dt, 0, 100);
-    if (moving && !p.stun) p.angle += clamp(angle(Math.atan2(dy, dx) - p.angle), -(mounted ? HORSES[p.horse].turn : 9) * dt, (mounted ? HORSES[p.horse].turn : 9) * dt);
+    const heading = Number.isFinite(i.moveAngle) ? i.moveAngle : Math.atan2(dy, dx);
+    if (moving && !p.stun) p.angle += clamp(angle(heading - p.angle), -(mounted ? HORSES[p.horse].turn : 9) * dt, (mounted ? HORSES[p.horse].turn : 9) * dt);
     const speed = moving && !p.stun ? (mounted ? HORSES[p.horse].speed : 120) * (sprint ? 1.55 : 1) * (p.boost > 0 ? 1.3 : 1) : 0;
     p.vx += (Math.cos(p.angle) * speed - p.vx) * Math.min(1, dt * 5);
     p.vy += (Math.sin(p.angle) * speed - p.vy) * Math.min(1, dt * 5);
