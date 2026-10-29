@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#281e17">
+  <title>Dust & Dynamite · Last Rodeo of Redwater Gulch</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="arena" aria-label="Redwater Gulch game arena"></canvas>
+  <div class="film" aria-hidden="true"></div>
+  <header><a class="brand" href="/">D<span>&</span>D <small>REDWATER GULCH</small></a><div class="edition">THE LAST RODEO <span>EST. 1899</span></div><button id="sound" class="quiet">SOUND OFF ♫</button></header>
+  <main id="menu" class="screen">
+    <section class="intro"><div class="eyebrow">EIGHT OUTLAWS. ONE WAY OUT.</div><h1>DUST <i>&</i><br>DYNAMITE</h1><div class="subtitle"><span></span> LAST RODEO OF REDWATER GULCH <span></span></div><p>The sun is sinking. The law is long gone.<br>Saddle up, keep your powder dry, and be the last rider standing.</p><div class="tags"><span>8 RIDERS</span><b>✦</b><span>3 MODES</span><b>✦</b><span>NO SECOND CHANCES</span></div></section>
+    <section class="paper enlist"><div class="paper-top">REDWATER COUNTY SHERIFF’S OFFICE</div><h2>WANTED</h2><div class="small-caps">DEAD OR THE LAST ONE ALIVE</div><div class="rule"></div>
+      <label for="name">YOUR OUTLAW NAME</label><input id="name" maxlength="18" value="The Stranger" autocomplete="nickname">
+      <div class="form-row"><div><label for="horse">YOUR STEED</label><select id="horse"><option>Mustang</option><option>Appaloosa</option><option>Black Stallion</option><option>Palomino</option></select></div><div><label for="outfit">YOUR THREADS</label><select id="outfit"><option value="poncho">Rust Poncho</option><option value="bandana">Sage Bandana</option><option value="duster">Dark Duster</option></select></div></div>
+      <div class="form-row"><div><label for="hat">YOUR HAT</label><select id="hat"><option value="wide">Wide Brim</option><option value="flat">Flat Crown</option><option value="tall">Tall Crown</option></select></div><div><label for="mode">THE SHOWDOWN</label><select id="mode"><option value="ffa">Free-for-All</option><option value="posse">Posse vs Posse</option><option value="bounty">Bounty Hunt</option></select></div></div>
+      <button id="quick" class="primary">SADDLE UP <span>→</span></button><button id="create" class="secondary">CREATE PRIVATE ROOM</button>
+      <div class="join-row"><input id="code" placeholder="ROOM CODE" maxlength="5" aria-label="Room code"><button id="join">JOIN ROOM</button></div><p class="note">Ride with friends, or face a town full of outlaws.<br>Empty saddles are filled by AI riders.</p><div id="error" role="alert"></div>
+    </section>
+    <footer><span>REDWATER GULCH, NEW MEXICO TERRITORY</span><span class="online" id="connection">CONNECTING TO THE TELEGRAPH…</span></footer>
+  </main>
+  <section id="lobby" class="screen hidden"><div class="lobby-head"><div class="eyebrow">THE POSTER WALL</div><h2>GATHER YOUR OUTLAWS</h2><p>Room <strong id="roomCode"></strong> · <span id="lobbyMode"></span> · Share this code with your posse</p></div><div id="posters"></div><p id="readyHint">Every rider must ready up. The remaining saddles go to bots.</p><div class="buttons"><button id="ready" class="primary">READY TO RIDE</button><button class="secondary leave">LEAVE ROOM</button></div></section>
+  <section id="hud" class="hidden"><div class="match-top"><div><span class="eyebrow">REDWATER GULCH</span><h3 id="matchMode">LAST RIDER STANDING</h3></div><div class="clock"><b id="timer">3:00</b><span id="alive">8 RIDERS REMAIN</span></div></div><div id="feed"></div><div id="announcement"></div><div class="vitals paper"><div class="rider-name" id="riderName"></div><div class="meter"><span>RIDER</span><progress id="hp" max="100" value="100"></progress></div><div class="meter"><span>STEED</span><progress id="horseHp" max="100" value="100"></progress></div><div class="meter"><span>STAMINA</span><progress id="stamina" max="100" value="100"></progress></div></div><div class="weapon paper"><span id="weaponName">REVOLVER</span><strong id="ammo">6 <small>/ 48</small></strong><div id="gear"></div></div><canvas id="minimap" width="200" height="146" aria-label="Arena minimap"></canvas><div id="spectator" class="hidden">YOUR RIDE IS OVER · WATCH THE LAST OUTLAWS</div><button id="ledgerBtn" class="quiet">TAB · BOUNTY LEDGER</button></section>
+  <section id="results" class="screen hidden"><div class="paper result-paper"><div class="eyebrow">THE REDWATER GAZETTE · SPECIAL EDITION</div><h2>THE DUST SETTLES</h2><div class="rule"></div><p>LAST RIDER STANDING</p><h3 id="winner"></h3><div id="resultTable"></div><div class="buttons"><button id="rematch" class="primary">ONE MORE RODEO</button><button class="secondary leave">LEAVE TOWN</button></div></div></section>
+  <section id="ledger" class="hidden paper"><h2>BOUNTY LEDGER</h2><div id="ledgerTable"></div></section>
+  <aside id="controls"><span><kbd>W A S D</kbd> Ride</span><span><kbd>MOUSE</kbd> Aim & fire</span><span><kbd>R</kbd> Reload</span><span><kbd>SHIFT</kbd> Sprint</span><span><kbd>SPACE</kbd> Jump</span><span><kbd>Q</kbd> Dynamite</span><span><kbd>E</kbd> Lasso</span></aside>
+  <script src="/socket.io/socket.io.js"></script><script src="shared.js"></script><script src="game.js"></script>
+</body></html>
