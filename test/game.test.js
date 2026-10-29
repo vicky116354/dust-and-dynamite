@@ -25,7 +25,13 @@ test('shared movement collides with cover, jumps low cover, and spends stamina',
 });
 test('HTTP serves complete client and health endpoint', async t => {
   const f = await fixture(t);
-  for (const route of ['/', '/game.js', '/shared.js', '/style.css', '/socket.io/socket.io.js', '/health']) assert.equal((await fetch(f.url + route)).status, 200);
+  for (const route of ['/', '/game.js', '/view3d.js', '/shared.js', '/style.css', '/vendor/three.module.js', '/vendor/three.core.js', '/socket.io/socket.io.js', '/health']) { const response = await fetch(f.url + route); assert.equal(response.status, 200); await response.arrayBuffer(); }
+});
+test('camera-relative input uses the same precise heading in prediction and server physics', () => {
+  const p = { x: 1000, y: 900, vx: 0, vy: 0, angle: .4, horse: 'Mustang', horseHp: 100, alive: true, stamina: 100 };
+  for (let i = 0; i < 12; i++) S.move(p, { up: true, moveAngle: .4 });
+  assert.ok(p.x > 1010 && p.y > 905);
+  assert.ok(Math.abs(Math.atan2(p.y - 900, p.x - 1000) - .4) < .001);
 });
 test('room codes, ready-up, unique bot fill, all modes and rematch', async t => {
   const f = await fixture(t);
@@ -72,11 +78,68 @@ test('authoritative fire, horse death, foot timer, pickups, reload and storm', a
   r.time = 170; await until(() => survivor.hp < 100); assert.ok(r.storm < 240);
 });
 test('malformed inputs and packet flood cannot teleport or accelerate a rider', async t => {
-  const f = await fixture(t), a = await f.connect(); const { code } = await f.join(a); const r = f.game.rooms.get(code);
-  a.emit('ready'); await until(() => r.phase === 'countdown'); r.countdown = .01; await until(() => r.phase === 'round');
+  const f = await fixture(t), a = await f.connect(), b = await f.connect(); const { code } = await f.join(a, { maxPlayers: 2, fillBots: false }); const r = f.game.rooms.get(code);
+  await f.join(b, { code }); a.emit('ready'); b.emit('ready'); await until(() => r.phase === 'countdown'); r.countdown = .01; await until(() => r.phase === 'round');
   const p = r.players[0]; p.x = 1100; p.y = 900;
   a.emit('input', { seq: 1, aim: null, x: 999999, hp: 999 }); await sleep(70); assert.equal(p.seq, 0); assert.equal(p.hp, 100);
   const x = p.x;
   for (let i = 2; i < 300; i++) a.emit('input', { seq: i, aim: 0, right: true, x: 999999 });
   await sleep(180); assert.ok(p.x - x < 60); assert.ok(p.queue.length <= 5); assert.ok(p.x < 2000);
+});
+
+test('two-player friends-only rooms never add bots and retain settings for rematch', async t => {
+  const f = await fixture(t), a = await f.connect(), b = await f.connect(), c = await f.connect();
+  const { code } = await f.join(a, { maxPlayers: 2, fillBots: false });
+  const r = f.game.rooms.get(code); a.emit('ready'); await sleep(80);
+  assert.equal(r.phase, 'lobby', 'one friend must not win an empty round');
+  await f.join(b, { code, maxPlayers: 8, fillBots: true });
+  assert.equal(r.maxPlayers, 2); assert.equal(r.fillBots, false);
+  assert.match((await f.join(c, { code })).error, /full/);
+  b.emit('ready'); await until(() => r.phase === 'countdown');
+  assert.equal(r.players.length, 2); assert.ok(r.players.every(p => !p.bot));
+  r.countdown = .01; await until(() => r.phase === 'round');
+  const blocked = await new Promise(resolve => a.emit('roomSettings', { maxPlayers: 4, fillBots: true }, resolve));
+  assert.match(blocked.error, /between rounds/);
+  r.players[1].alive = false; await until(() => r.phase === 'results');
+  a.emit('rematch'); await until(() => r.phase === 'lobby');
+  assert.equal(r.maxPlayers, 2); assert.equal(r.fillBots, false);
+  const changed = await new Promise(resolve => a.emit('roomSettings', { maxPlayers: 4, fillBots: true }, resolve));
+  assert.equal(changed.ok, true); assert.ok(r.players.every(p => !p.ready));
+  a.emit('ready'); b.emit('ready'); await until(() => r.phase === 'countdown');
+  assert.equal(r.players.length, 4); assert.equal(r.players.filter(p => p.bot).length, 2);
+});
+
+test('only the host edits room settings; invalid sizes reject; host transfers on disconnect', async t => {
+  const f = await fixture(t), a = await f.connect(), b = await f.connect();
+  const { code } = await f.join(a, { maxPlayers: 4, fillBots: false }); await f.join(b, { code });
+  const r = f.game.rooms.get(code);
+  const settings = (c, data) => new Promise(resolve => c.emit('roomSettings', data, resolve));
+  assert.match((await settings(b, { maxPlayers: 2, fillBots: true })).error, /Only the room host/);
+  for (const maxPlayers of [0, 9, 3.5, '4', null]) assert.ok((await settings(a, { maxPlayers, fillBots: false })).error);
+  a.emit('ready'); await sleep(60); assert.equal(r.players[0].ready, true);
+  assert.equal((await settings(a, { maxPlayers: 3, fillBots: false })).ok, true);
+  assert.ok(r.players.every(p => !p.ready));
+  a.disconnect(); await until(() => r.hostId === b.id);
+  assert.equal((await settings(b, { maxPlayers: 2, fillBots: true })).ok, true);
+  b.emit('ready'); await until(() => r.phase === 'countdown'); assert.equal(r.players.length, 2);
+});
+
+test('small bot-filled matches and Quick Match respect requested capacity and bot policy', async t => {
+  const f = await fixture(t), a = await f.connect(), b = await f.connect(), c = await f.connect();
+  const first = await f.join(a, { quick: true, maxPlayers: 4, fillBots: false });
+  const second = await f.join(b, { quick: true, maxPlayers: 4, fillBots: true });
+  assert.notEqual(first.code, second.code);
+  assert.equal((await f.join(c, { quick: true, maxPlayers: 4, fillBots: false })).code, first.code);
+  const r = f.game.rooms.get(second.code); b.emit('ready'); await until(() => r.phase === 'countdown');
+  assert.equal(r.players.length, 4); assert.equal(r.players.filter(p => p.bot).length, 3);
+});
+
+test('friends-only posses wait for equal teams and reject odd capacities', async t => {
+  const f = await fixture(t), a = await f.connect(), b = await f.connect(), c = await f.connect(), d = await f.connect();
+  const { code } = await f.join(a, { mode: 'posse', maxPlayers: 4, fillBots: false });
+  await f.join(b, { code }); await f.join(c, { code }); const r = f.game.rooms.get(code);
+  const reply = await new Promise(resolve => a.emit('roomSettings', { maxPlayers: 3, fillBots: false }, resolve)); assert.match(reply.error, /even/);
+  a.emit('ready'); b.emit('ready'); c.emit('ready'); await sleep(100); assert.equal(r.phase, 'lobby');
+  await f.join(d, { code }); d.emit('ready'); await until(() => r.phase === 'countdown');
+  assert.equal(r.players.length, 4); assert.equal(r.players.filter(p => p.team === 0).length, 2);
 });
