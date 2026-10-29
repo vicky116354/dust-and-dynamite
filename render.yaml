@@ -1,0 +1,14 @@
+# Deploy this repository as one Node web service (client + multiplayer server).
+# Keep one instance: room state lives in memory inside this process.
+services:
+  - type: web
+    name: dust-and-dynamite
+    runtime: node
+    plan: free
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_ENV
+        value: production
